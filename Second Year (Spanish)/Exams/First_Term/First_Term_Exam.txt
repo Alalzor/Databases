@@ -1,0 +1,266 @@
+EXAMEN BASES DE DATOS 1 EVALUACIÓN ALEJANDRO ALMAGRO TORREGROSA 
+
+Se esta trabajando con la imagen de Docker creada a partir del dockerfile echo en la unidad 1:
+
+FROM mysql:8.0-debian
+ENV LC_ALL=es_ES.UTF-8
+ENV LANG=es_ES
+ENV MYSQL_ALLOW_EMPTY_PASSWORD=yes
+RUN apt-get update && apt-get install -y locales
+RUN printf '%s\n' LANG=es_ES LC_ALL=es_ES.UTF-8 >/etc/default/locale
+RUN echo es_ES.UTF-8 UTF-8 >>/etc/locale.gen
+RUN locale-gen
+
+Se ha echo una red con Docker mired
+Se ha creado la subnet 10.0.5.0/24 como data_net1
+Se le asigna al contenedor ds la ip 10.0.5.1
+Se ha escrito en my.conf lo que ponía en el examen
+No se ha echo un secure_installation
+
+1. USUARIO:
+USE estrella_muerte;
+
+CREATE USER IF NOT EXISTS 'id_trooper o id_oficial'@'%'
+IDENTIFIED BY RANDOM PASSWORD
+PASSWORD EXPIRE INTERVAL 15 DAY PASSWORD EXPIRE
+FAILED_LOGIN_ATTEMPTS 5 PASSWORD_LOCK_TIME UNBOUNDED
+PASSWORD REQUIRE CURRENT PASSWORD HISTORY 1;
+
+TENDRAN QUE CAMBIAR SU CONTRASEÑA TRAS SU PRIMER USO, HAY QUE PROPORCIONARSELA.
+(SE asume que en esta pregunta no se asignan roles)
+
+2.CERTIFICADO  DE CONEXION CON EL /CN=Palpatin
+
+Si lo haces en la maquina virutal
+
+Creamos un directorio  nuevo mkdir certificados.
+
+Y generaríamos los siguientes certificados con la herramienta openssl
+
+# Clave privada para la CA:
+
+openssl genrsa 2048 > ca-key.pem
+
+# Certificado autofirmado de la CA
+openssl req -new -x509 -nodes -days 3650 -key ca-key.pem -out ca-cert.pem -subj
+"/CN=MySQL_CA"
+
+# Clave privada para el servidor
+openssl genrsa 2048 > server-key.pem
+
+# CSR para el servidor
+openssl req -new -key server-key.pem -out server-req.pem -subj "/CN=MySQL_Server"
+
+# Firmar el certificado del servidor con la CA
+openssl x509 -req -in server-req.pem -days 3650 -CA ca-cert.pem -CAkey ca-key.pem -
+set_serial 01 -out server-cert.pem
+
+# Clave privada para el cliente
+openssl genrsa 2048 > client-key.pem
+
+# CSR para el cliente
+openssl req -new -key client-key.pem -out client-req.pem -subj "/CN=Palpatine"
+
+# Firmar el certificado del cliente con la CA
+openssl x509 -req -in client-req.pem -days 3650 -CA ca-cert.pem -CAkey ca-key.pem -
+set_serial 01 -out client-cert.pem
+
+Ahora con Docker importaríamos los certifcados solo  servidor y el CA a la maquina servidor:
+
+docker cp ca-cert.pem ds:/etc/mysql/ca-cert.pem
+docker cp server-key.pem ds:/etc/mysql/server-key.pem
+docker cp server-cert.pem ds:/etc/mysql/server-cert.pem
+
+Tocaria entrar con Docker al contenedor para cambiar el archivo /etc/MySQL/my.conf para añadir la siguiente linea:
+
+Docker exec -it ds bash
+Ejectuando: apt update && apt install nano -y
+Para modificar el archivo:  nano /etc/MySQL/my.conf
+
+ssl-ca=/etc/mysql/ca-cert.pem
+ssl-cert=/etc/mysql/server-cert.pem
+ssl-key=/etc/mysql/server-key.pem
+require-secure-transport=ON
+
+Saldríamos del contenedor y haríamos un Docker restart ds.
+
+Ahora por ejemplo utilizaríamos el usuario creado en el punto uno pero con id de trooper 1 para ejecutar la siguiente sentencia:
+Docker exec -it ds MySQL
+
+USE estrella_muerte;
+
+ALTER USER '1'@'%' REQUIRE SUBJECT '/CN=Palpatine'; en este caso.
+
+Creando un contenedor nuevo para que se conecte el oficial 1 y copiando los permisos de ssl pertenecientes al cliente:
+
+docker run -dit --name O1 --network data_net mysqlesp
+docker cp ca-cert.pem O1:/etc/mysql/ca-cert.pem
+docker cp client-key.pem O1:/etc/mysql/client-key.pem
+docker cp client-cert.pem O1:/etc/mysql/client-cert.pem
+
+PARA LOGEARNOS CORRECTAMENTE HARIAMOS USO DE LA SENTENCIA:
+
+docker exec -it O1 MySQL -u 1 -p -h ds --ssl-ca=/etc/mysql/ca-cert.pem
+--ssl-cert=/etc/mysql/client-cert.pem --ssl-key=/etc/mysql/client-key.pem
+
+Donde 01 es el contenedor, -u el oficial en este caso 1, -p para su contraseña, -h apunta al contenedor ds donde esta el servidor
+
+3. Base De datos Accesible para toda la galaxia.
+
+Entrando en la maquina contenedora: Docker exec -it ds bash
+
+Seguido de : nano /etc/MySQL/my.conf
+Pondríamos el bind-address=0.0.0.0 debajo de mysqld.
+Saldríamos y reniciariamos el cliente contenedor Docker restart ds
+
+
+4. TIMEOUT IDLE EN 1 MINUTO
+
+En el mismo archivo de antes /etc/MySQL/my.conf por ejemplo podemos añadir la siguiente linea con el valor desado:
+
+wait_timeout = 60 (el valor en segundos que nos piden u podríamos poner otro)
+
+Guardaríamos el archivo y reiniciaríamos el cliente.
+
+exit
+
+Docker restart ds
+
+
+5. Soldados imperiales consulta prisioneros.
+
+Habria que crear un rol en la base de datos estrella_muerte:
+
+
+CREATE ROLE IF NOT EXISTS soldado_imperial;
+
+Para la primera parte:
+
+GRANT SELECT (nombre, especie, causa_detencion) ON estrella_muerte.prisioneros TO soldado_imperial;
+
+GRANT SELECT  ON estrella_muerte.misiones TO soldado_imperial;
+
+
+6. NIVELES DE Autorizacion
+
+Habria que crear los 3 roles de autorización:
+
+CREATE ROLE IF NOT EXISTS primer_nivel;
+CREATE ROLE IF NOT EXISTS segundo_nivel;
+CREATE ROLE IF NOT EXISTS tercer_nivel;
+
+Primer nivel:
+GRANT SELECT (nombre, especie, causa_detencion) ON estrella_muerte.prisioneros TO primer_nivel;
+GRANT SELECT ON estrella_muerte.alojados TO primer_nivel;
+GRANT SELECT ON estrella_muerte.celdas TO primer_nivel;
+
+Segundo nivel:
+
+GRANT SELECT, UPDATE, INSERT, DELETE ON estrella_muerte.alojados TO segundo_nivel;
+GRANT SELECT, UPDATE, INSERT, DELETE ON estrella_muerte.celdas TO segundo_nivel;
+GRANT SELECT, UPDATE, INSERT, DELETE ON estrella_muerte.prisioneros TO segundo_nivel;
+
+Tercer nivel:
+
+GRANT ALL PRIVILEGES ON estrella_muerte.* TO tercer_nivel;
+
+
+7.  Politica de seguridad
+
+
+En el primer nivel los troopers también deberían consultar el contenido de la tabla misiones y asignación para saber su id_mision, añadiríamos:
+
+GRANT SELECT ON estrella_muerte.asignacion TO primer_nivel;
+GRANT SELECT ON estrella_muerte.misiones TO primer_nivel;
+
+Solo los oficiales deberían poder asignar y gestionar misiones a parte de lord Vader. Para esto crearíamos un rol:
+
+CREATE ROLE IF NOT EXISTS oficial;
+
+GRANT SELECT, UPDATE, INSERT, DELETE ON estrella_muerte.alojados TO oficial;
+GRANT SELECT, UPDATE, INSERT, DELETE ON estrella_muerte.celdas TO oficial;
+GRANT SELECT, UPDATE, INSERT, DELETE ON estrella_muerte.prisioneros TO oficial;
+GRANT INSERT, UPDATE ON estrella_muerte.misiones TO oficial;
+
+
+8. Conexiones
+
+
+Como lo he entendido es a la hora de crear un usario en este caso cuando se le asigne uno de los roles que hemos creado, habrá que añadirle la conexión:
+
+CREATE USER 'TRO111'@'10.0.5.33'
+IDENTIFIED BY RANDOM PASSWORD
+DEFAULT ROLE primer_nivel
+PASSWORD EXPIRE INTERVAL 15 DAY PASSWORD EXPIRE
+FAILED_LOGIN_ATTEMPTS 5 PASSWORD_LOCK_TIME UNBOUNDED
+PASSWORD REQUIRE CURRENT PASSWORD HISTORY 1;
+
+En el segundo nivel para oficiales seria:
+CREATE USER '1'@'10.0.5.33'
+IDENTIFIED BY RANDOM PASSWORD
+DEFAULT ROLE segundo_nivel
+PASSWORD EXPIRE INTERVAL 15 DAY PASSWORD EXPIRE
+FAILED_LOGIN_ATTEMPTS 5 PASSWORD_LOCK_TIME UNBOUNDED
+PASSWORD REQUIRE CURRENT PASSWORD HISTORY 1;
+
+La consulta en la tabla oficiales, me dice que se enumeran del 1 al x.
+
+En el caso de lord Vader:
+
+CREATE USER 'LordVader'@'%'
+IDENTIFIED BY RANDOM PASSWORD
+DEFAULT ROLE tercer_nivel
+PASSWORD EXPIRE INTERVAL 15 DAY PASSWORD EXPIRE
+FAILED_LOGIN_ATTEMPTS 5 PASSWORD_LOCK_TIME UNBOUNDED
+PASSWORD REQUIRE CURRENT PASSWORD HISTORY 1;
+
+
+(En todos los ejemplos del 8 y 10 el default role se ha activado para esta sesión, cuando los usuarios inicien sesión deberán escribir una vez dentro SET DEFAULT ROLE x para que se quede para siempre)
+
+
+9. Vader decide sobre ello en el futuro para establecer la política de seguridad completa.
+
+No he entendido esta parte.
+
+10. Crear un cilindro calve con todos los niveles de autorización salvo el de lord Vader.
+
+Aquí he entendido que creo un usuario con todos los permisos de autorización menos el tres, como los permisos del nivel 1 ya los tiene el dos, seria de la siguiente manera:
+
+CREATE USER '2'@'10.0.5.33'
+IDENTIFIED BY RANDOM PASSWORD
+DEFAULT ROLE segundo_nivel
+PASSWORD EXPIRE INTERVAL 15 DAY PASSWORD EXPIRE
+FAILED_LOGIN_ATTEMPTS 5 PASSWORD_LOCK_TIME UNBOUNDED
+PASSWORD REQUIRE CURRENT PASSWORD HISTORY 1;
+
+El oficial dos se podría conectar desde 10.0.5.33 solamente en la estrella de la muerte y tiene asigandos los roles que le dan todos los niveles de autorización menos el de Vader.
+
+(En todos los ejemplos del 8 y 10 el default role se ha activado para esta sesión, cuando los usuarios inicien sesión deberán escribir una vez dentro SET DEFAULT ROLE x para que se quede para siempre)
+
+11.Lista con todas las vistas de la base de datos junto con su definición:
+
+Primera consulta sobre information.schema:
+Vistas de la base de datos con su descripción.
+
+SELECT table_name, table_schema, view_definition FROM information_schema.views
+WHERE table_schema = 'estrella_muerte';
+
+Segunda consulta desde en mysql:
+
+Usuarios,roles y cuales por defecto
+
+SELECT D.user, D.default_role_user, R.from_user FROM mysql.default_roles D
+JOIN mysql.role_edges R ON D.user = R.to_user;
+
+
+
+
+
+
+
+
+
+
+
+
+

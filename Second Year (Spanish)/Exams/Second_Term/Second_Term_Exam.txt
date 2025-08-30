@@ -1,0 +1,221 @@
+ALEJANDRO ALMAGRO TORREGROSA
+
+
+
+1. Automatización de procesos
+
+1.1 Creación de índice en el campo de condición, creación de las tablas
+
+CREATE INDEX idx_rango ON troopers (rango);
+
+CREATE TABLE asignacion1 (
+    id_mision INT,
+    id_trooper CHAR(6),
+    rango VARCHAR(20),
+    PRIMARY KEY (id_mision, id_trooper),
+    FOREIGN KEY (id_mision) REFERENCES misiones(id_mision),
+    FOREIGN KEY (id_trooper) REFERENCES troopers(id_trooper),
+    FOREIGN KEY (rango) REFERENCES troopers(rango)
+);
+
+CREATE TABLE asignacion2 (
+    id_mision INT,
+    id_trooper CHAR(6),
+    rango VARCHAR(20),
+    PRIMARY KEY (id_mision, id_trooper),
+    FOREIGN KEY (id_mision) REFERENCES misiones(id_mision),
+    FOREIGN KEY (id_trooper) REFERENCES troopers(id_trooper),
+    FOREIGN KEY (rango) REFERENCES troopers(rango)
+);
+
+Se crea un trigger para eviat insertar trooper que no sean soldados en la asignacion1
+
+DELIMITER //
+DROP TRIGGER IF EXISTS insertar_soldado//
+CREATE TRIGGER insertar_soldado BEFORE INSERT ON asigancion1 a1
+FOR EACH ROW
+BEGIN
+    IF rango.a1 != Soldado THEN
+	SIGNAL SQL STATE '45000'
+	SET MESSAGE_TEXT = 'El trooper no es soldado';
+END//
+DELIMITER ;
+
+1.2 Procedimiento almacenado para realizar inserciones en las tablas fragmentadas
+
+DELIMITER //
+DROP PROCEDURE IF EXISTS insertar_soldados//
+CREATE PROCEDURE insertar_soldados (p_mision INT, p_trooper CHAR(6), p_rango VARCHAR(20))
+BEGIN
+DECLARE t_rango VARCHAR(20);
+
+	ROLLBACK;
+        IF p_mision IS NOT NULL AND 
+       	 p_mision = 0 THEN
+            SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'No se puede insertar mision';
+        END IF;
+        RESIGNAL;
+    END;
+
+START TRANSACTION;
+
+SELECT rango INTO t_rango FROM troopers WHERE rango = 'Soldado';
+IF t_rango = 'Soldado' THEN
+INSERT INTO asignacion1 (id_mision, id_trooper, rango) VALUES (p_mision, p_trooper, p_rango);
+ELSE 
+INSERT INTO asignacion2 (id_mision, id_trooper, rango) VALUES (p_mision, p_trooper, p_rango);
+END IF;
+
+INSERT INTO asignacion (id_mision, id_trooper) VALUES (p_mision, p_trooper);
+
+COMMIT;
+
+DELIMITER;
+
+
+1.3 Funcion que los datos están fragmentados correctamente
+
+DELIMITER //
+DROP FUNCTION IF EXISTS contar_tablas//
+CREATE FUNCTION contar_tablas(p_mision INT) 
+RETURNS INT
+READS SQL DATA
+BEGIN
+	DECLARE done INT DEFAULT 0;
+	DECLARE errores INT;
+	DECLARE c_mision INT;
+	DECLARE c_trooper CHAR(6);
+	DECLARE c_rango VARCHAR(20);
+	
+
+DECLARE rango_soldado CURSOR FOR 
+        SELECT id_mision, id_trooper, rango 
+        FROM asignacion1;
+
+SELECT COUNT(*) INTO errores FROM asigancion1 WHERE rango != 'SOLDADO';
+
+DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = 1;
+
+IF (SELECT rango FROM asignacion1) = 'Soldado' THEN
+SELECT 'NO Hay errores de asignacion' AS mensaje;
+
+ELSE
+	OPEN rango_soldado;
+	rango_loop: LOOP
+	FETCH rango_soldado INTO c_mision, c_trooper, c_rango;
+	IF done THEN
+	LEAVE rango_lopp;
+	END IF;
+
+INSERT INTO asignacion2 (id_mision, id_trooper, rango) VALUES (c_mision, c_trooper, c_rango);
+
+RETURN errores;
+
+END //
+
+DELIMITER;
+
+
+
+1.4 Realiza las operaciones necesarias para garantizar que un trooper almenos siempre tiene una asignación
+
+DELIMITER //
+DROP TRIGGER IF EXISTS trooper_asignacion//
+CREATE TRIGGER IF EXIST trooper_asignacion  BEFORE INSERT ON asigancion
+FOR EACH ROW
+BEGIN
+	IF (NEW.id_mision = 0 OR New.id_mision IS NULL  THEN
+	   SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'El trooper tiene que tener una misión asignada';
+    END IF;
+
+END //
+
+DELIMITER ;
+1.5. Crea un informe que almacene anualmente un archivo de texto de las tablas fragmentadas
+ 
+Supongamos "secure_file_priv = /tmp/", que existe en el contenedor de MySQL. */
+
+DELIMITER //
+DROP EVENT IF EXISTS asignaciones_v1//
+CREATE EVENT asignaciones_v1
+ON SCHEDULE EVERY 1 YEAR STARTS '2025-02-17 00:00:00'
+DISABLE
+DO
+BEGIN
+    SELECT id_mision, id_trooper, rango
+    INTO OUTFILE '/tmp/asignacion.txt' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'
+    FROM asignaciones1;
+END//
+DELIMITER ;
+
+DELIMITER //
+DROP EVENT IF EXISTS asignaciones_v2//
+CREATE EVENT asignaciones_v2
+ON SCHEDULE EVERY 1 YEAR STARTS '2025-02-17 00:00:00'
+DISABLE
+DO
+BEGIN
+    SELECT id_mision, id_trooper, rango
+    INTO OUTFILE '/tmp/asignacion2.txt' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'
+    FROM asignaciones2;
+END//
+DELIMITER ;
+
+No he sabido juntarlo todo en una.
+
+
+
+
+
+
+
+2. NBD Cluster
+
+Creación de la red:
+
+docker network create cluster --subnet=10.18.0.0/16
+
+1 nodo de gestión
+
+docker run -d --net=cluster --name=management1 --ip=10.18.0.2 container-registry.oracle.com/mysql/community-cluster ndb_mgmd
+
+ 6 nodos de datos
+
+docker run -d --net=cluster --name=ndb1 --ip=10.18.0.3 container-registry.oracle.com/mysql/community-cluster ndbd
+docker run -d --net=cluster --name=ndb2 --ip=10.18.0.4 container-registry.oracle.com/mysql/community-cluster ndbd
+docker run -d --net=cluster --name=ndb3 --ip=10.18.0.5 container-registry.oracle.com/mysql/community-cluster ndbd
+docker run -d --net=cluster --name=ndb4 --ip=10.18.0.6 container-registry.oracle.com/mysql/community-cluster ndbd
+docker run -d --net=cluster --name=ndb5 --ip=10.18.0.7 container-registry.oracle.com/mysql/community-cluster ndbd
+docker run -d --net=cluster --name=ndb6 --ip=10.18.0.8 container-registry.oracle.com/mysql/community-cluster ndbd
+
+1 nodo de MySQL server
+
+docker run -d --net=cluster --name=mysql1 --ip=10.18.0.9 -e MYSQL_RANDOM_ROOT_PASSWORD=true container-registry.oracle.com/mysql/community-cluster mysqld
+
+Comprobación para ver la contraseña:
+
+docker logs mysql1 2>&1 | grep PASSWORD
+
+Si no nos devuelve nada podremos entrar sin password
+
+Para correr el cliente de nbd_mgm
+
+docker run -it --net=cluster container-registry.oracle.com/mysql/community-cluster ndb_mgm
+
+Ahora con show veremos el cluster.
+
+Pasamos ahora a los archivos de configuración, como bien ha puesto manu he quitado los espacios en el cluster.cnf.
+No me ha dado tiempo a testear como hacer la imagen como ponía en la practica
+ FROM mysql/mysql-cluster
+COPY mysql-cluster.cnf /etc/mysql-cluster.cnf
+
+Se adjuntan las configuraciones. y la foto del error
+
+
+
+
+
+
+
